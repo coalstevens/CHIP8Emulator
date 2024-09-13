@@ -1,0 +1,25 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build",
+            "type": "shell",
+            "command": "clang",
+            "args": [
+                "main.c",
+                "glad/src/glad.c",
+                "-o", "main",
+                "-I/opt/homebrew/include",
+                "-L/opt/homebrew/lib",
+                "-lSDL2",
+                "-I./glad/include"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "Generated task by VS Code."
+        }
+    ]
+}
