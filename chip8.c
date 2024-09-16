@@ -1,150 +1,226 @@
 #include "chip8.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <SDL2/SDL.h>
+
+#define ROM_START_ADDRESS 0x200
+#define MAX_ROM_SIZE (4096 - ROM_START_ADDRESS)
+
+uint8_t fontSet[80] = {
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2j
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+};
+
+SDL_Keycode keymap[16] = {
+        SDLK_1,
+        SDLK_2,
+        SDLK_3,
+        SDLK_4,
+        SDLK_q,
+        SDLK_w,
+        SDLK_e,
+        SDLK_r,
+        SDLK_a,
+        SDLK_s,
+        SDLK_d,
+        SDLK_f,
+        SDLK_z,
+        SDLK_x,
+        SDLK_c,
+        SDLK_v
+};
 
 void initializeChip(ChipContext* chip) {
-    ChipContext chip;
-    chip->PC = 0x200; // Starts at address 0x200
+    chip->PC = ROM_START_ADDRESS;
     chip->SP = 0;
     chip->I = 0;
+    chip->delayTimer = 0;
+    chip->soundTimer = 0;
+
     memset(chip->V, 0, sizeof(chip->V)); 
     memset(chip->memory, 0, sizeof(chip->memory)); 
     memset(chip->frameBuffer, 0, sizeof(chip->frameBuffer)); 
     memset(chip->stack, 0, sizeof(chip->stack));
-    chip->delayTimer = 0;
-    chip->soundTimer = 0;
+
+    memcpy(chip->memory, fontSet, sizeof(fontSet));
 }
 
-void executeCPUCycle(ChipContext* chip) {
-    u_int16_t instruction = (chip->memory[chip->PC] << 8) | chip->memory[chip->PC + 1]; // Grab instruction
-    chip->PC += 2; // Move PC to next instruction
-    u_int8_t x = (instruction & 0x0F00) >> 8;
-    u_int8_t y = (instruction & 0x00F0) >> 4;
-    u_int8_t nnn = (instruction & 0x0FFF);
-    u_int8_t kk = (instruction & 0x00FF);
+void executeInstruction(ChipContext* chip, Display* display) {
+    uint16_t instruction = (chip->memory[chip->PC] << 8) | chip->memory[chip->PC + 1]; // Grab instruction
+    printf("PC: %04X, I: %04X, Executing instruction: %04X\n", chip->PC, chip->I, instruction);
+    chip->PC += 2;
+    uint8_t x = (instruction & 0x0F00) >> 8;
+    uint8_t y = (instruction & 0x00F0) >> 4;
+    uint16_t nnn = (instruction & 0x0FFF);
+    uint8_t kk = (instruction & 0x00FF);
 
     switch((instruction & 0xF000) >> 12) { 
+
         case 0x0:
             switch (instruction & 0xFFF) {
                 case 0x0E0: // 00E0 CLS - Clears display
                     memset(chip->frameBuffer, 0, sizeof(chip->frameBuffer));
+                    SDL_SetRenderDrawColor(display->renderer, 0, 0, 0, 255);
+                    SDL_RenderClear(display->renderer);
                     break;
                 case 0x0EE: // 00EE RET - Jumps to address on top of the stack
-                    chip->PC = chip->memory[chip->SP];
                     chip->SP--;
+                    chip->PC = chip->stack[chip->SP];
                     break;
                 default: // Usually 0nnn SYS addr - Jumps to a machine code nnn. Generally ignored now.
                     break;
             }
             break;
+
         case 0x1: // 1nnn JP addr
             chip->PC = nnn;
             break;
+
         case 0x2: // 2nnn CALL addr - Calls subroutine at nnn
-            chip->SP++;
             chip->stack[chip->SP] = chip->PC; // Address to return after subroutine completes
+            chip->SP++;
             chip->PC = nnn;
             break;
+
         case 0x3: // 3xkk SE Vx, byte - Skips next instruction if Vx = kk
             if (chip->V[x] == kk) 
                 chip->PC += 2;
             break;
+
         case 0x4: // 4xkk SNE Vx, byte - Skips next instruction if Vx != kk
             if (chip->V[x] != kk) 
                 chip->PC += 2;
             break;
+
         case 0x5: // 5xy0 SE, Vx, Vy - Skips next instruction if Vx = Vy
-            if (chip->V[x] != chip->V[y]) 
+            if (chip->V[x] == chip->V[y]) 
                 chip->PC += 2; 
             break;
+
         case 0x6: // 6xkk LD Vx, byte
             chip->V[x] = kk;
             break;
+
         case 0x7: // 7xkk ADD Vx, byte
             chip->V[x] += kk;
             break;
+
         case 0x8: // 8xyk Performs an operation between Vx and Vy
             switch (instruction & 0xF) {
-                case 0: // LD
+                case 0x0: // LD
                     chip->V[x] = chip->V[y];
                     break;
-                case 1: // OR
+                case 0x1: // OR
                     chip->V[x] |= chip->V[y];
                     break;
-                case 2: // AND
+                case 0x2: // AND
                     chip->V[x] &= chip->V[y];
                     break;
-                case 3: // XOR 
+                case 0x3: // XOR 
                     chip->V[x] ^= chip->V[y];
                     break;
-                case 4: // ADD
-                    u_int16_t result = chip->V[x] + chip->V[y];
-                    chip->V[x] = (u_int8_t) result;
-                    chip->V[0xF] = (result > 0xFF) ? 1 : 0;
-                    break;
-                case 5: // SUB
+                case 0x4: // ADD
+                    {
+                        uint16_t result = chip->V[x] + chip->V[y];
+                        chip->V[x] = (uint8_t) result;
+                        chip->V[0xF] = (result > 0xFF) ? 1 : 0; // Set carry
+                        break;
+                    }
+                case 0x5: // SUB
                     chip->V[0xF] = (chip->V[x] > chip->V[y]) ? 1 : 0;
                     chip->V[x] -= chip->V[y];
                     break;
-                case 6: // SHR Vx {, Vy}
-                    chip->V[0xF] = (chip->V[x] & 1) ? 1 : 0;
+                case 0x6: // SHR Vx {, Vy}
+                    chip->V[0xF] = (chip->V[x] & 1);
                     chip->V[x] >>= 1;
                     break;
-                case 7: // SUBN Vx {, Vy}
+                case 0x7: // SUBN Vx {, Vy}
                     chip->V[0xF] = (chip->V[y] > chip->V[x]) ? 1 : 0;
                     chip->V[x] = chip->V[y] - chip->V[x];
                     break;
                 case 0xE: // SHL Vx {, Vy}
-                    chip->V[0xF] = (chip->V[x] & (1 << 7)) ? 1 : 0;
+                    chip->V[0xF] = (chip->V[x] >> 7);
                     chip->V[x] <<= 1;
                     break;
             }
             break;
+
         case 0x9: // 9xy0 SNE Vx, Vy - Skips next instruction if Vx != Vy
             if (chip->V[x] != chip->V[y]) 
                 chip->PC += 2;
             break;
+
         case 0xA: // Annn LD I, addr - Loads address into I
             chip->I = nnn;
             break;
+
         case 0xB: // Bnnn JP V0, addr - Jump to nnn + V0
             chip->PC = nnn + chip->V[0];
             break;
-        case 0xC: // Cxkk RND Vx, Byte 0 - Vx = a random 8-bit value & kk
-            u_int8_t randomValue = rand() % (256); 
-            chip->V[x] = randomValue & kk;
-            break;
-        case 0xD: // Dxyn DRW Vx, VY, nibble 
-            int n = instruction & 0x000F;  
-            int frameRow = chip->V[x];
-            
-            for(int spriteByte = 0; spriteByte < n; spriteByte++, frameRow++) {
-                int frameCol = chip->V[y];
-                for (int i = 0; i < 8; i++, frameCol++) {
-                    u_int8_t pixel = (chip->memory[chip->I + spriteByte] >> (7 - i)) & 1;
-                    if (pixel == 1) {
-                        if (frameRow >= DISPLAY_HEIGHT) frameRow = 0; // Wrap around top if needed
-                        if (frameCol >= DISPLAY_WIDTH) frameCol = 0;  // Wrap around left if needed
-                        
-                        if (chip->frameBuffer[frameRow][frameCol] == 1) chip->V[0xF] = 1; // collision detected
 
-                        chip->frameBuffer[frameRow][frameCol] ^= 1;
+        case 0xC: // Cxkk RND Vx, Byte 0 - Vx = a random 8-bit value & kk
+            {
+                uint8_t randomValue = rand() % (256); 
+                chip->V[x] = randomValue & kk;
+                break;
+            }
+        case 0xD: // Dxyn DRW Vx, VY, nibble 
+            {
+                uint8_t n = instruction & 0x000F;  
+                uint8_t yStart = chip->V[y];
+                uint8_t xStart = chip->V[x];
+                chip->V[0xF] = 0;
+
+                for(int row = 0; row < n; row++) {
+                    uint8_t pixel = chip->memory[chip->I + row];
+                    for (int col = 0; col < 8; col++) {
+                        if ((pixel & (0b10000000 >> col))) {
+                            uint8_t xcoord = (xStart + col) % DISPLAY_WIDTH;
+                            uint8_t ycoord = (yStart + row) % DISPLAY_HEIGHT;
+                 
+                            if (chip->frameBuffer[ycoord][xcoord]) {
+                                chip->V[0xF] = 1; // collision detected
+                                drawPixel(ycoord, xcoord, BACKGROUND, display);
+                                chip->frameBuffer[ycoord][xcoord] = 0;
+                            } 
+                            else {
+                                drawPixel(ycoord, xcoord, FOREGROUND, display);
+                                chip->frameBuffer[ycoord][xcoord] = 1;
+                            }
+                        }
                     }
                 }
             }
             break;
         case 0xE:
             switch (instruction & 0x00FF) {
-                case 0x9E: // Ex9E SKP Vx - If key V[x] is pressed skip next         
-                    if(((chip->keyState >> chip->V[x]) & 1) == 1) 
-                        chip->PC += 2;  
-                    break;
-                case 0xA1: // ExA1 SKP Vx - If key V[x] is not pressed skip next     
-                    if(((chip->keyState >> chip->V[x]) & 1) == 0) 
-                        chip->PC += 2;
-                    break;
+                case 0x9E: // Ex9E SKP Vx - If key V[x] is pressed skip next
+                    {
+                        const uint8_t* keyStates = SDL_GetKeyboardState(NULL);
+                        SDL_Scancode code = SDL_GetScancodeFromKey(keymap[chip->V[x]]);
+                        if (keyStates[code])
+                            chip->PC += 2; 
+                        break;
+                    }
+                case 0xA1: // ExA1 SKP Vx - If key V[x] is not pressed skip next 
+                    {
+                        const uint8_t* keyStates = SDL_GetKeyboardState(NULL);
+                        SDL_Scancode code = SDL_GetScancodeFromKey(keymap[chip->V[x]]);    
+                        if (!keyStates[code])
+                            chip->PC += 2;
+                        break;
+                    }
             }
             break;
         case 0xF:
@@ -153,16 +229,19 @@ void executeCPUCycle(ChipContext* chip) {
                     chip->V[x] = chip->delayTimer;
                     break;
                 case 0x0A: // LD Vx, K - Wait for a key press, store the value of the key in Vx
-                    SDL_Event event;
-                    while(1) {
-                        SDL_WaitEvent(&event);
-                        if (event.type == SDL_KEYDOWN) {
-                            int keyPressed = handleKeyPress(event.key.keysym.sym, chip);
-                            if (keyPressed != -1) {
-                                chip->V[x] = keyPressed;
+                    {
+                        const uint8_t* keyStates = SDL_GetKeyboardState(NULL);
+                        uint8_t pressed = 0;
+                        for (int i = 0; i < 16; i++) {
+                            SDL_Scancode code = SDL_GetScancodeFromKey(keymap[i]);
+                            if (keyStates[code]) {
+                                chip->V[x] = i;
+                                pressed = 1;
                                 break;
                             }
                         }
+                        if (pressed == 0)
+                            chip->PC -= 2;
                     }
                     break;
                 case 0x15: // Fx15 LD DT, Vx
@@ -175,7 +254,7 @@ void executeCPUCycle(ChipContext* chip) {
                     chip->I += chip->V[x];
                     break;
                 case 0x29: // Fx29 LD F, Vx
-                    chip->I = fontSet[chip->V[x] * 5];
+                    chip->I = chip->V[x] * 5;
                     break;
                 case 0x33: // Fx33 LD B, Vx - Stores decimal digits of Vx at mem[I + 0, 1, 2]
                     chip->memory[chip->I] = chip->V[x] / 100;
@@ -183,11 +262,11 @@ void executeCPUCycle(ChipContext* chip) {
                     chip->memory[chip->I + 2] = chip->V[x] % 10;
                     break;
                 case 0x55: // Fx55 LD [I], Vx - Copies V[] into memory at I
-                    for(int i = 0; i < 16; i++)
+                    for(int i = 0; i <= x; i++)
                         chip->memory[chip->I + i] = chip->V[i];
                     break;
                 case 0x65: // Fx65 LD Vx, [I] - Copies memory starting at I to V[] 
-                    for (int i = 0; i < 16; i++)
+                    for (int i = 0; i <= x; i++)
                         chip->V[i] = chip->memory[chip->I + i];
                     break;
             }
@@ -195,57 +274,112 @@ void executeCPUCycle(ChipContext* chip) {
     }
 }
 
-int handleKeyPress(SDL_KeyCode keyCode, ChipContext* chip) {
-    switch (keyCode) {
-        case SDLK_1:
-            chip->keyState |= 1 << 0x0;
-            return 0x0;
-        case SDLK_2:
-            chip->keyState |= 1 << 0x1;
-            return 0x1;
-        case SDLK_3:
-            chip->keyState |= 1 << 0x2;
-            return 0x2;
-        case SDLK_4:
-            chip->keyState |= 1 << 0x3;
-            return 0x3;
-        case SDLK_q:
-            chip->keyState |= 1 << 0x4;
-            return 0x4;
-        case SDLK_w:
-            chip->keyState |= 1 << 0x5;
-            return 0x5;
-        case SDLK_e:
-            chip->keyState |= 1 << 0x6;
-            return 0x6;
-        case SDLK_r:
-            chip->keyState |= 1 << 0x7;
-            return 0x7;
-        case SDLK_a:
-            chip->keyState |= 1 << 0x8;
-            return 0x8;
-        case SDLK_s:
-            chip->keyState |= 1 << 0x9;
-            return 0x9;
-        case SDLK_d:
-            chip->keyState |= 1 << 0xA;
-            return 0xA;
-        case SDLK_f:
-            chip->keyState |= 1 << 0xB;
-            return 0xB;
-        case SDLK_z:
-            chip->keyState |= 1 << 0xC;
-            return 0xC;
-        case SDLK_x:
-            chip->keyState |= 1 << 0xD;
-            return 0xD;
-        case SDLK_c:
-            chip->keyState |= 1 << 0xE;
-            return 0xE;
-        case SDLK_v:
-            chip->keyState |= 1 << 0xF;
-            return 0xF;
-        default:
-            return -1;
+int loadROM(const char* filename, ChipContext* chip) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) {
+        printf("Failed to open ROM file: %s\n", filename);
+        return -1;
     }
-} 
+
+    // Determine the file size
+    fseek(file, 0, SEEK_END);
+    long fileSize = ftell(file);
+    rewind(file);
+
+    if (fileSize < 0) {
+        printf("Failed to determine file size.\n");
+        fclose(file);
+        return -1;
+    }
+    // Check if the file size is within the acceptable range
+    if (fileSize > MAX_ROM_SIZE) {
+        printf("ROM file is too large. Maximum size is %d bytes.\n", MAX_ROM_SIZE);
+        fclose(file);
+        return -1;
+    }
+
+    // Read the ROM file into memory
+    size_t bytesRead = fread(chip->memory + ROM_START_ADDRESS, 1, fileSize, file);
+
+    // Print all bytes read as 16-bit hexadecimal instructions
+    printf("ROM instructions:\n");
+    for (size_t i = 0; i < bytesRead; i += 2) {
+        if (i + 1 < bytesRead) {
+            uint16_t instruction = (chip->memory[ROM_START_ADDRESS + i] << 8) | chip->memory[ROM_START_ADDRESS + i + 1];
+            printf("%04X ", instruction);
+        } else {
+            // Handle case where there is an odd number of bytes
+            uint8_t byte = chip->memory[ROM_START_ADDRESS + i];
+            printf("%02X ", byte);
+        }
+
+        if ((i / 2 + 1) % 8 == 0) {
+            printf("\n"); // Newline for readability, every 8 instructions
+        }
+    }
+    printf("\n");
+
+    printf("%zu \n", bytesRead);
+    if (bytesRead != fileSize) {
+        printf("Failed to read the entire ROM file.\n");
+        fclose(file);
+        return -1;
+    }
+
+    // Close the file
+    fclose(file);
+    return 0; // Success
+}
+
+void drawPixel(uint8_t y, uint8_t x, enum layer layerName, Display* display) {
+    switch (layerName) {
+        case BACKGROUND:
+            SDL_SetRenderDrawColor(display->renderer, 0, 0, 0, 255);
+            break;
+        case FOREGROUND:
+            SDL_SetRenderDrawColor(display->renderer, 255, 255, 255, 255);
+            break;
+        default:
+            printf("Layer does not exist.");
+            break;
+    }
+
+    // Draw scaled up pixel
+    SDL_Rect rect = {x * SCALE, y * SCALE, SCALE, SCALE};
+    SDL_RenderFillRect(display->renderer, &rect);
+}
+
+int initializeGraphics(Display* display, int width, int height) {
+    // Initialize the video subsystem
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        printf("SDL could not be initialized: %s\n", SDL_GetError());
+        return 1;
+    } else {
+        printf("SDL video system is ready to go\n");
+    }
+
+    // Create the window
+    display->window = SDL_CreateWindow("CHIP8",
+                               SDL_WINDOWPOS_CENTERED,
+                               SDL_WINDOWPOS_CENTERED,
+                               width,
+                               height,
+                               SDL_WINDOW_SHOWN);
+                               
+    if (!display->window) {
+        printf("Window could not be created: %s\n", SDL_GetError());
+        SDL_Quit();
+        return 1;
+    }
+
+    // Create the renderer
+    display->renderer = SDL_CreateRenderer(display->window, -1, SDL_RENDERER_SOFTWARE);
+    if (!display->renderer) {
+        printf("Failed to create renderer: %s\n", SDL_GetError());
+        SDL_DestroyWindow(display->window);
+        SDL_Quit();
+        return 1;
+    }
+
+    return 0; // Success
+}

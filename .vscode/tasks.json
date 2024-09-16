@@ -6,8 +6,10 @@
             "type": "shell",
             "command": "clang",
             "args": [
+                "-std=c99",
                 "main.c",
-                "glad/src/glad.c",
+                //"glad/src/glad.c",
+                "chip8.c",
                 "-o", "main",
                 "-I/opt/homebrew/include",
                 "-L/opt/homebrew/lib",
