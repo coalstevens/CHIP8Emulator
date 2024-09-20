@@ -1,11 +1,3 @@
-# Project Name
+# CHIP8 Emulator
 
-A brief description of your project.
-
-## Installation
-
-Instructions on how to install and run the project.
-
-## Usage
-
-Examples or details on how to use the project.
+The classic first emulator project. The real challenge is trying to figure out how to use SDL! 
